@@ -71,6 +71,7 @@ void Example::printGrid(int w, int h) {
 class DataLoader {
 public:
   Example getNext();
+  const vector<Example> getNext(int num);
 
   DataLoader(const string& p, const string& p2);
   int imageHeight, imageWidth, gridSize;
@@ -133,6 +134,14 @@ Example DataLoader::getNext() {
   return Example(input, gridSize, output, 10, label);
 }
 
+const vector<Example> DataLoader::getNext(int num) {
+  vector<Example> es;
+  for (int i=0; i<num; i++) {
+    es.push_back(getNext());
+  }
+  return es;
+}
+
 class NeuralNetwork {
 public:
   NeuralNetwork(int *layout, int lsize);
@@ -140,6 +149,7 @@ public:
   void printWeights();
   const vector<MatrixXd> backprop(const Example &e);
   void SGD(DataLoader &dl);
+  const vector<MatrixXd> calcFromBatch(vector<Example *> &es);
 private:
   int depth; 
 	vector<int> layout;
@@ -266,36 +276,46 @@ const vector<MatrixXd> NeuralNetwork::backprop(const Example &e) {
 
 void NeuralNetwork::SGD(DataLoader &dl) {
 
-  //cout << net.feedForward(MatrixXd::Zero(784, 1));
-
   double batchSize = 10, lrate = 3;
   int count = 0;
 
   for (int i=0; i<1000; ++i) {
-    // Initialize sum of gradients to 0.
-    vector<MatrixXd> deltas(depth);
-    for (int i=0; i<depth; i++) {
-      deltas[i] = MatrixXd::Zero(weights[i].rows(), weights[i].cols());
+    vector<Example *> es;
+    for (int i=0; i<batchSize; i++) {
+      es.push_back(new Example(dl.getNext()));
     }
-
-    for (int i2=0; i2<batchSize; ++i2, ++count) {
-      //system("clear");
-      printf("i=%d\n", count);
-      Example example = dl.getNext();
-      //example.printGrid(28, 28);
-      vector<MatrixXd> dd = backprop(example);
-      // Accumulate nablas.
-      for (int i=0; i<dd.size(); ++i) {
-        deltas[i] += dd[i];
-      }
-    }
+    const vector<MatrixXd> deltas = calcFromBatch(es);
 
     // Use sum of gradients to modify weights.
     for (int i=0; i<depth; i++) {
       weights[i] -= lrate/batchSize*deltas[i];
     }
 
+    for (int i=0; i<batchSize; i++) {
+      delete es[i];
+    }
   }
+}
+
+const vector<MatrixXd> NeuralNetwork::calcFromBatch(vector<Example *> &es) {
+  // Initialize sum of gradients to 0.
+  vector<MatrixXd> deltas(depth);
+  for (int i=0; i<depth; i++) {
+    deltas[i] = MatrixXd::Zero(weights[i].rows(), weights[i].cols());
+  }
+
+  for (int i2=0; i2<es.size(); ++i2) {
+    //system("clear");
+    //cout << es[i2].getInput() << endl;
+    //printf("oiem %d %d\n", i2, es[i2].getInput().size());
+    vector<MatrixXd> dd = backprop(*(es[i2]));
+    // Accumulate nablas.
+    for (int i=0; i<dd.size(); ++i) {
+      deltas[i] += dd[i];
+    }
+  }
+
+  return deltas;
 }
 
 int main() {
