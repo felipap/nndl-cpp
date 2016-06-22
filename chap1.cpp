@@ -1,4 +1,6 @@
 // chap1.cpp
+// This was pretty useful:
+// https://eigen.tuxfamily.org/dox-devel/AsciiQuickReference.txt
 
 #include "chap1.hpp"
 
@@ -18,6 +20,7 @@ using namespace std;
 
 #include <eigen3/Eigen/Dense>
 
+
 using namespace Eigen;
 
 #define _swapend __builtin_bswap32
@@ -34,8 +37,10 @@ public:
   const VectorXd &getInput() const { return data; }
   const VectorXd &getLabel() const { return label; }
 
+  int y;
+
 private:
-  int inSize, outSize, y;
+  int inSize, outSize;
   VectorXd data, label;
 };
 
@@ -44,7 +49,7 @@ Example::Example(uint8_t *cs, int inSize, uint8_t *output, int outSize, int y)
 : inSize(inSize), outSize(outSize), y(y) {
   data = VectorXd(inSize);
   for (int i=0; i<inSize; ++i) {
-    data[i] = int(cs[i]);
+    data[i] = int(cs[i])/256.0;
   }
   label = VectorXd(outSize);
   for (int i=0; i<outSize; ++i) {
@@ -53,7 +58,7 @@ Example::Example(uint8_t *cs, int inSize, uint8_t *output, int outSize, int y)
 }
 
 void Example::printGrid(int w, int h) {
-  cout << label << endl;
+  cout << y << endl;
   for (int y=0; y<h; ++y) {
     for (int x=0; x<w; ++x) {
       printf("%d ", int(data[y*w+x]));
@@ -148,18 +153,9 @@ private:
 void NeuralNetwork::printWeights() {
   cout << string(60, '-') << endl;
 
-  cout << "> Biases: " << endl;
-  for (int i=1; i<layout.size(); ++i) {
-    cout << "Layer :" << i << ": ";
-    for (int d=0; d<layout[i]; ++d) {
-      cout << setw(4) << biases[i-1][d] << " ";
-    }
-    cout << endl;
-  }
-
   cout << "\n> Weights: " << endl;
-  for (int i=0; i<layout.size(); ++i) {
-    cout << "Layer " << i << ":\n" << weights[0] << "\n";
+  for (int i=0; i<depth; ++i) {
+    cout << "Layer " << i << ":\n" << weights[i] << "\n";
   }
   cout << string(60, '-') << endl;
 }
@@ -187,12 +183,12 @@ NeuralNetwork::NeuralNetwork(int *_layout, int size) : depth(size-1) {
 }
 
 VectorXd sigmoid(const VectorXd &base) {
-  return base.unaryExpr([](double x) { return 1 / (1 + exp(-x) ); });
+  return 1.0 / (1.0 + (-base).array().exp());
 }
 
 VectorXd sigmoidPrime(const VectorXd &base) {
-  VectorXd sig = sigmoid(base);
-  return sig.cwiseProduct(VectorXd(1-sig.array()));
+  auto sig = sigmoid(base);
+  return sig.array()*(1-sig.array());
 }
 
 VectorXd NeuralNetwork::feedForward(const VectorXd input) {
@@ -229,7 +225,7 @@ const vector<MatrixXd> NeuralNetwork::backprop(const Example &e) {
   vector<MatrixXd> grad(depth); // Store final weight gradient, to be returned.
   vector<VectorXd> zs(depth); // Store z vectors for all layers.
 
-  // Fill up grad matrices with zeroes.
+  // Fill up gradient matrices with zeroes.
   for (int i=0; i<depth; ++i) {
     auto &w = weights[i];
     grad[i] = MatrixXd::Zero(w.rows(), w.cols());
@@ -246,35 +242,24 @@ const vector<MatrixXd> NeuralNetwork::backprop(const Example &e) {
     VectorXd z = weights[i].transpose()*actvs[i];
     zs[i] = z;
     actvs[i+1] = sigmoid(z);
-    actvs[i+1][0] = 1; // Bias neuron.
+    if (i != depth-1) {
+      actvs[i+1][0] = 1; // Bias neuron.
+    }
   }
 
   // Backprop. Here's the math-intense part.
   VectorXd delta = costDerivative(actvs[depth], e.getLabel())
     .cwiseProduct(sigmoidPrime(zs.back()));
-  
-  //printf("w(%d,%d)\n", delta.rows(), delta.cols());
-  //printf("w(%d,%d)\n", actvs[depth-1].rows(), actvs[depth-1].cols());
   grad[depth-1] = actvs[depth-1]*delta.transpose();
-  //printf("w(%d,%d)\n", grad[depth-1].rows(), grad[depth-1].cols());
-  //cout << "Grad: \n" << grad[depth-1] << endl;
+  
 
   // Loop layers, from depth-2 to 0, finding the nablas and partial derivatives.
   for (int i=depth-2; i >= 0; --i) {
-    //printf("i=%d\n", i);
-    //cout << "Porra: \n" << sigmoidPrime(zs[i]) << endl;
     delta = (weights[i+1]*delta).cwiseProduct(sigmoidPrime(zs[i]));
-    //printf("d(%d,%d)\n", delta.rows(), delta.cols());
-    //cout << "Delta: \n" << delta << endl;
     grad[i] = actvs[i] * delta.transpose();
-    //printf("g(%d,%d)\n", grad[i].rows(), grad[i].cols());
-    //cout << "Actvs " << i << endl << actvs.back() << endl;
   }
 
-  //printf("w(%d,%d)\n", grad[depth-1].rows(), grad[depth-1].cols());
-  //cout << "Grad " << grad[depth-1] << endl;
-  cout << "Right? " << actvs[depth] << endl;
-  //cout << "Right? " << e.getLabel() << endl;
+  cout << "Right? " << e.y << endl << actvs[depth] << endl;
 
   return grad;
 }
@@ -283,10 +268,10 @@ void NeuralNetwork::SGD(DataLoader &dl) {
 
   //cout << net.feedForward(MatrixXd::Zero(784, 1));
 
-  int batchSize = 5, lrate = 3;
+  double batchSize = 10, lrate = 3;
   int count = 0;
 
-  for (int i=0; i<20; ++i) {
+  for (int i=0; i<1000; ++i) {
     // Initialize sum of gradients to 0.
     vector<MatrixXd> deltas(depth);
     for (int i=0; i<depth; i++) {
@@ -294,27 +279,22 @@ void NeuralNetwork::SGD(DataLoader &dl) {
     }
 
     for (int i2=0; i2<batchSize; ++i2, ++count) {
-      system("clear");
+      //system("clear");
       printf("i=%d\n", count);
-      //cout << "let's get next" << i2 << endl;
       Example example = dl.getNext();
-       example.printGrid(28, 28);
+      //example.printGrid(28, 28);
       vector<MatrixXd> dd = backprop(example);
       // Accumulate nablas.
       for (int i=0; i<dd.size(); ++i) {
-        printf("wtfucking w(%d,%d) with dd(%d,%d)\n", deltas[i].rows(),
-          deltas[i].cols(), dd[i].rows(), dd[i].cols());
-
         deltas[i] += dd[i];
       }
     }
 
     // Use sum of gradients to modify weights.
     for (int i=0; i<depth; i++) {
-      printf("updating w(%d,%d) with delta(%d,%d)\n", weights[i].rows(),
-          weights[i].cols(), deltas[i].rows(), deltas[i].cols());
       weights[i] -= lrate/batchSize*deltas[i];
     }
+
   }
 }
 
