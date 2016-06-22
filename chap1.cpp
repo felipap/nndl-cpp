@@ -120,6 +120,10 @@ Example DataLoader::getNext() {
   uint8_t input[gridSize], output[10] = {0};
   // Read next label and next image.
   fileLabels.read((char *) &label, 1);
+  if (label < 0 || label > 9) {
+    throw domain_error("Label byte with invalid value detected.");
+  }
+  output[label] = 1;
   fileImages.read((char *) input, gridSize);
   return Example(input, gridSize, output, 10);
 }
@@ -129,7 +133,7 @@ public:
   NeuralNetwork(int *layout, int lsize);
 
   void printWeights();
-  const vector<const MatrixXd> backprop(Example &e);
+  const vector<MatrixXd> backprop(Example &e);
 private:
   int depth; 
 	vector<int> layout;
@@ -186,44 +190,66 @@ NeuralNetwork::NeuralNetwork(int *_layout, int size) : depth(size-1) {
 VectorXd NeuralNetwork::feedForward(const VectorXd input) {
   MatrixXd A(input);
   for (int i=0; i<depth; ++i) {
-    A = weights[i].transpose()*A;
+    A = sigmoid(weights[i].transpose()*A);
   }
   return A;
 }
 
 VectorXd sigmoid(const VectorXd &base) {
-  return base.unaryExpr([](double x) { return 1 / (1 + exp(-x)); });
+  return base.unaryExpr([](double x) { return 1 / (1 + exp(-x) ); });
+}
+
+VectorXd sigmoidPrime(const VectorXd &base) {
+  VectorXd sig = sigmoid(base);
+  //cout << sig << endl;
+  //return VectorXd::Ones(base.size());
+  return sig.cwiseProduct(VectorXd(1-sig.array()));
 }
 
 VectorXd NeuralNetwork::costDerivative(VectorXd f_x, VectorXd f_y) {
   return f_x-f_y;
 }
 
-const vector<const MatrixXd> NeuralNetwork::backprop(Example &e) {
-  vector<const MatrixXd> grad; // Store final weight gradient, to be returned.
-  vector<const VectorXd> zs; // Store z vectors for all layers.
+const vector<MatrixXd> NeuralNetwork::backprop(Example &e) {
+  vector<MatrixXd> grad(depth); // Store final weight gradient, to be returned.
+  vector<VectorXd> zs(depth); // Store z vectors for all layers.
 
-  // Fill up gradient matrices with zeroes.
+  // Fill up grad matrices with zeroes.
   for (int i=0; i<depth; ++i) {
     auto &w = weights[i];
-    grad.push_back(MatrixXd::Zero(w.rows(), w.cols()));
+    grad[i] = MatrixXd::Zero(w.rows(), w.cols());
   }
 
-  vector<const VectorXd> actvs;
-  actvs.push_back(e.getInput());
+  // Keep track of activations, including input from example.
+  vector<VectorXd> actvs(depth+1);
+  actvs[0] = e.getInput();
 
   // Feedforward.
   for (int i=0; i<depth; i++) {
     // !! We're making unnecessary copies here.
-    VectorXd z = weights[i].transpose()*actvs.back();
-    VectorXd actv = sigmoid(z);
-    actvs.push_back(actv);
-    zs.push_back(z);
+    VectorXd z = weights[i].transpose()*actvs[i];
+    zs[i] = z;
+    actvs[i+1] = sigmoid(z);
   }
   
-  cout << actvs.back() << endl;
-  // Backprop.
-  VectorXd delta = costDerivative(actvs.back(), e.getLabel());
+  // Backprop. Here's the math-intense part.
+  VectorXd delta = costDerivative(actvs[depth], e.getLabel())
+    .cwiseProduct(sigmoidPrime(zs.back()));
+  
+  grad[depth-1] = delta * actvs[depth].transpose();
+  cout << "Grad: \n" << grad[depth-1] << endl;
+
+  // Loop layers, from depth-2 to 0, finding the nablas and partial derivatives.
+  for (int i=depth-2; i >= 0; --i) {
+    printf("i=%d\n", i);
+    //cout << "Porra: \n" << sigmoidPrime(zs[i]) << endl;
+    delta = (weights[i+1]*delta).cwiseProduct(sigmoidPrime(zs[i]));
+    //cout << "Delta: \n" << delta << endl;
+    grad[i] = delta * actvs[i].transpose();
+    //cout << "Actvs " << i << endl << actvs.back() << endl;
+  }
+
+  cout << "Grad " << grad[1] << endl;
 
   return grad;
 }
@@ -234,7 +260,7 @@ int main() {
 	int layout[] = {784, 30, 10};
   NeuralNetwork net(layout, sizeof(layout)/sizeof(*layout));
 
-  for (int i=0; i<1; ++i) {
+  for (int i=0; i<100; ++i) {
     system("clear");
     cout << "let's get next\n";
     Example example = dl.getNext();
