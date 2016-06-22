@@ -72,6 +72,7 @@ class DataLoader {
 public:
   Example getNext();
   const vector<Example> getNext(int num);
+  const vector<Example> getAll();
 
   DataLoader(const string& p, const string& p2);
   int imageHeight, imageWidth, gridSize;
@@ -137,6 +138,14 @@ Example DataLoader::getNext() {
 const vector<Example> DataLoader::getNext(int num) {
   vector<Example> es;
   for (int i=0; i<num; i++) {
+    es.push_back(getNext());
+  }
+  return es;
+}
+
+const vector<Example> DataLoader::getAll() {
+  vector<Example> es;
+  while (!fileLabels.eof()) {
     es.push_back(getNext());
   }
   return es;
@@ -263,35 +272,36 @@ const vector<MatrixXd> NeuralNetwork::backprop(const Example &e) {
       actvs[i+1][0] = 1; // Set bias neuron (not present in final layer) to 1.
       
       // Notice that actvs[i+1][0] would be 0, otherwise, because the weights
-      // into the bias neuron are set to 0 (so that the bias neuron doesn't
-      // alter the partial derivatives of the cost function with respect to the
-      // neurons on the layers behind the bias neuron's one).
+      // into all bias neurons are set to 0 (so that it doesn't alter the
+      // partial derivatives of the cost function with respect to the neurons on
+      // the layers behind that of the bias neuron).
     }
   }
 
-  // Backprop. Here's the math-intense part.
+  // Backprop.
   VectorXd delta = costDerivative(actvs[depth], e.getLabel())
     .cwiseProduct(sigmoidPrime(zs.back()));
   grad[depth-1] = actvs[depth-1]*delta.transpose();
-  
 
-  // Loop layers, from depth-2 to 0, finding the nablas and partial derivatives.
+  // Loop layers, from second-to-last to first, computing the nablas and partial
+  // derivatives.
   for (int i=depth-2; i >= 0; --i) {
     delta = (weights[i+1]*delta).cwiseProduct(sigmoidPrime(zs[i]));
     grad[i] = actvs[i] * delta.transpose();
   }
 
-  cout << "Right? " << e.y << endl << actvs[depth] << endl;
-
   return grad;
 }
 
 void NeuralNetwork::SGD(DataLoader &dl) {
-
   double batchSize = 10, lrate = 3;
   int count = 0;
 
+  vector<Example> es = dl.getAll();
+
   for (int i=0; i<1000; ++i) {
+
+
     vector<Example *> es;
     for (int i=0; i<batchSize; i++) {
       es.push_back(new Example(dl.getNext()));
@@ -300,7 +310,7 @@ void NeuralNetwork::SGD(DataLoader &dl) {
 
     // Use sum of gradients to modify weights.
     for (int i=0; i<depth; i++) {
-      weights[i] -= lrate/batchSize*deltas[i];
+      weights[i] -= lrate*deltas[i];
     }
 
     for (int i=0; i<batchSize; i++) {
@@ -309,6 +319,8 @@ void NeuralNetwork::SGD(DataLoader &dl) {
   }
 }
 
+// Given a set of training examples, find the average gradient of the cost
+// function with respect to the weights (biases included) of the neural net.
 const vector<MatrixXd> NeuralNetwork::calcFromBatch(vector<Example *> &es) {
   // Initialize sum of gradients to 0.
   vector<MatrixXd> deltas(depth);
@@ -323,11 +335,12 @@ const vector<MatrixXd> NeuralNetwork::calcFromBatch(vector<Example *> &es) {
     vector<MatrixXd> dd = backprop(*(es[i2]));
     // Accumulate nablas.
     for (int i=0; i<dd.size(); ++i) {
-      deltas[i] += dd[i];
+      deltas[i] += dd[i]; // Accumulate the partial derivatives (𝜕Cost(W)/𝜕w).
     }
   }
 
-  return deltas;
+  // Return average of sum of gradients.
+  return deltas/es.size();
 }
 
 int main() {
