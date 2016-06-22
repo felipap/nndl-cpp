@@ -31,8 +31,8 @@ public:
   int getSize() { return data.size(); }
   void printGrid(int rows, int cols);
 
-  const VectorXd &getInput() { return data; }
-  const VectorXd &getLabel() { return label; }
+  const VectorXd &getInput() const { return data; }
+  const VectorXd &getLabel() const { return label; }
 
 private:
   int inSize, outSize;
@@ -133,7 +133,8 @@ public:
   NeuralNetwork(int *layout, int lsize);
 
   void printWeights();
-  const vector<MatrixXd> backprop(Example &e);
+  const vector<MatrixXd> backprop(const Example &e);
+  void SGD(DataLoader &dl);
 private:
   int depth; 
 	vector<int> layout;
@@ -168,31 +169,21 @@ NeuralNetwork::NeuralNetwork(int *_layout, int size) : depth(size-1) {
 	layout = vector<int>(_layout, _layout+size);
 
 	for (int i=1; i<depth; ++i) { // We don't need biases for the first layer.
-	  biases.push_back(VectorXd::Random(layout[i]));
+	  biases.push_back(VectorXd::Random(layout[i]+1));
 	}
 
-  for (int i=0; i<depth; ++i) {
-    MatrixXd matrix = MatrixXd::Random(layout[i], layout[i+1]);
+  for (int i=0; i<depth-1; ++i) {
+    // +1 for biases. Adding +1 on the columns (weight output) also, even though
+    // the bias faux-neuron shouldn't take inputs (its value must remain 1),
+    // because this makes the multiplications easier in backprop.
+    MatrixXd matrix = MatrixXd::Random(layout[i]+1, layout[i+1]+1);
+    matrix.col(0).setZero();
     weights.push_back(matrix);
   }
-
-  //MatrixXd l1(3,2);
-  //l1 << 1, 2, 3, 4, 5, 6;
-  //weights.push_back(l1);
-  //MatrixXd l2(2,3);
-  //l2 << .1, .2, .3, .4, .5, .6;
-  //weights.push_back(l2);
-
-  //cout << feedForward(MatrixXd::Ones(3, 1));
-}
-
-
-VectorXd NeuralNetwork::feedForward(const VectorXd input) {
-  MatrixXd A(input);
-  for (int i=0; i<depth; ++i) {
-    A = sigmoid(weights[i].transpose()*A);
-  }
-  return A;
+  // Special case for last layer: output doesn't need a bias neuron, and having
+  // one wouldn't make things easier.
+  MatrixXd matrix = MatrixXd::Random(layout[depth-1]+1, layout[depth]);
+  weights.push_back(matrix);
 }
 
 VectorXd sigmoid(const VectorXd &base) {
@@ -201,16 +192,40 @@ VectorXd sigmoid(const VectorXd &base) {
 
 VectorXd sigmoidPrime(const VectorXd &base) {
   VectorXd sig = sigmoid(base);
-  //cout << sig << endl;
-  //return VectorXd::Ones(base.size());
   return sig.cwiseProduct(VectorXd(1-sig.array()));
+}
+
+VectorXd NeuralNetwork::feedForward(const VectorXd input) {
+  if (input.size() != layout[0]) {
+    throw domain_error("Wrong input dimension.");
+  }
+
+  VectorXd A(1+input.size());
+  A << 1, input; // Add bias neuron (set to 1);
+
+  for (int i=0; i<depth; ++i) {
+    A[0] = 1; // Set bias neuron to 1.
+    // A[0] = 1 mustn't be executed for last activation (aka. the nn output)
+    // because there's no bias neuron exists in the last layer.
+    A = sigmoid(weights[i].transpose()*A);
+  }
+
+  return A;
 }
 
 VectorXd NeuralNetwork::costDerivative(VectorXd f_x, VectorXd f_y) {
   return f_x-f_y;
 }
 
-const vector<MatrixXd> NeuralNetwork::backprop(Example &e) {
+const vector<MatrixXd> NeuralNetwork::backprop(const Example &e) {
+  if (e.getInput().size() != layout[0]) {
+    throw domain_error("Wrong input dimension.");
+  }
+
+  if (e.getLabel().size() != layout[depth]) {
+    throw domain_error("Wrong output dimension.");
+  }
+
   vector<MatrixXd> grad(depth); // Store final weight gradient, to be returned.
   vector<VectorXd> zs(depth); // Store z vectors for all layers.
 
@@ -222,16 +237,18 @@ const vector<MatrixXd> NeuralNetwork::backprop(Example &e) {
 
   // Keep track of activations, including input from example.
   vector<VectorXd> actvs(depth+1);
-  actvs[0] = e.getInput();
+  actvs[0] = VectorXd(layout[0]+1);
+  actvs[0] << 1, e.getInput(); // Add bias neuron with value 1.
 
   // Feedforward.
   for (int i=0; i<depth; i++) {
-    // !! We're making unnecessary copies here.
+    // !! We're making unnecessary copies here. ??
     VectorXd z = weights[i].transpose()*actvs[i];
     zs[i] = z;
     actvs[i+1] = sigmoid(z);
+    actvs[i+1][0] = 1; // Bias neuron.
   }
-  
+
   // Backprop. Here's the math-intense part.
   VectorXd delta = costDerivative(actvs[depth], e.getLabel())
     .cwiseProduct(sigmoidPrime(zs.back()));
@@ -254,20 +271,37 @@ const vector<MatrixXd> NeuralNetwork::backprop(Example &e) {
   return grad;
 }
 
+void NeuralNetwork::SGD(DataLoader &dl) {
+
+  //cout << net.feedForward(MatrixXd::Zero(784, 1));
+
+  for (int i=0; i<100; ++i) {
+    vector<VectorXd> deltas(depth);
+    for (int i=0; i<depth; i++) {
+      deltas[i] = VectorXd::Zero(layout[i]+1);
+    }
+
+    for (int i2=0; i2<5; ++i) {
+      //system("clear");
+      cout << "let's get next\n";
+      Example example = dl.getNext();
+      cout << "let's backprop\n";
+      // example.printGrid(28, 28);
+      vector<VectorXd> dd = net.backprop(example);
+      // Accumulate nablas.
+      for (int i=0; i<dd.size(); ++i) {
+        deltas[i] += dd[i];
+      }
+    }
+  }
+}
+
 int main() {
   DataLoader dl("train-labels-idx1-ubyte", "train-images-idx3-ubyte");
 
 	int layout[] = {784, 30, 10};
   NeuralNetwork net(layout, sizeof(layout)/sizeof(*layout));
-
-  for (int i=0; i<100; ++i) {
-    system("clear");
-    cout << "let's get next\n";
-    Example example = dl.getNext();
-    cout << "let's backprop\n";
-    // example.printGrid(28, 28);
-    net.backprop(example);
-  }
+  net.SGD(dl);
 
   return 0;
 }
