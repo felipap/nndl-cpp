@@ -274,7 +274,7 @@ const vector<MatrixXd> NeuralNetwork::backprop(const Example &e) {
   //printf("w(%d,%d)\n", grad[depth-1].rows(), grad[depth-1].cols());
   //cout << "Grad " << grad[depth-1] << endl;
   cout << "Right? " << actvs[depth] << endl;
-  cout << "Right? " << e.getLabel() << endl;
+  //cout << "Right? " << e.getLabel() << endl;
 
   return grad;
 }
@@ -286,7 +286,7 @@ void NeuralNetwork::SGD(DataLoader &dl) {
   int batchSize = 5, lrate = 3;
   int count = 0;
 
-  for (int i=0; i<1000; ++i) {
+  for (int i=0; i<20; ++i) {
     // Initialize sum of gradients to 0.
     vector<MatrixXd> deltas(depth);
     for (int i=0; i<depth; i++) {
@@ -298,7 +298,7 @@ void NeuralNetwork::SGD(DataLoader &dl) {
       printf("i=%d\n", count);
       //cout << "let's get next" << i2 << endl;
       Example example = dl.getNext();
-      // example.printGrid(28, 28);
+       example.printGrid(28, 28);
       vector<MatrixXd> dd = backprop(example);
       // Accumulate nablas.
       for (int i=0; i<dd.size(); ++i) {
