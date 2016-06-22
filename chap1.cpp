@@ -223,6 +223,9 @@ VectorXd NeuralNetwork::costDerivative(VectorXd f_x, VectorXd f_y) {
   return f_x-f_y;
 }
 
+// Use example's input (e.getInput()) and desired output (e.getLabel()) to
+// calculate gradient of the cost function with respect to each of the weights
+// (which include the biases, for simplification).
 const vector<MatrixXd> NeuralNetwork::backprop(const Example &e) {
   if (e.getInput().size() != layout[0]) {
     throw domain_error("Wrong input dimension.");
@@ -233,27 +236,36 @@ const vector<MatrixXd> NeuralNetwork::backprop(const Example &e) {
   }
 
   vector<MatrixXd> grad(depth); // Store final weight gradient, to be returned.
-  vector<VectorXd> zs(depth); // Store z vectors for all layers.
+  // To backprop, we need to keep track of the Zs (linear product of the weights
+  // and activations).
+  vector<VectorXd> zs(depth);
 
   // Fill up gradient matrices with zeroes.
   for (int i=0; i<depth; ++i) {
-    auto &w = weights[i];
+    auto &w =  weights[i];
     grad[i] = MatrixXd::Zero(w.rows(), w.cols());
   }
 
-  // Keep track of activations, including input from example.
+  // Keep track of activations, including input from example. +1 because
+  // the input layer is added.
   vector<VectorXd> actvs(depth+1);
   actvs[0] = VectorXd(layout[0]+1);
   actvs[0] << 1, e.getInput(); // Add bias neuron with value 1.
 
-  // Feedforward.
+  // Feedforward, calculating the Zs and activations.
   for (int i=0; i<depth; i++) {
-    // !! We're making unnecessary copies here. ??
+    // !! We're making unnece ssary copies here. ??
     VectorXd z = weights[i].transpose()*actvs[i];
     zs[i] = z;
     actvs[i+1] = sigmoid(z);
+
     if (i != depth-1) {
-      actvs[i+1][0] = 1; // Bias neuron.
+      actvs[i+1][0] = 1; // Set bias neuron (not present in final layer) to 1.
+      
+      // Notice that actvs[i+1][0] would be 0, otherwise, because the weights
+      // into the bias neuron are set to 0 (so that the bias neuron doesn't
+      // alter the partial derivatives of the cost function with respect to the
+      // neurons on the layers behind the bias neuron's one).
     }
   }
 
