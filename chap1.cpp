@@ -25,7 +25,7 @@ using namespace Eigen;
 class Example {
 public:
 
-  Example(uint8_t *input, int inSize, uint8_t *output, int outSize);
+  Example(uint8_t *input, int inSize, uint8_t *output, int outSize, int y);
   Example(const Example &e) { throw domain_error("can't copy example"); }
 
   int getSize() { return data.size(); }
@@ -35,13 +35,13 @@ public:
   const VectorXd &getLabel() const { return label; }
 
 private:
-  int inSize, outSize;
+  int inSize, outSize, y;
   VectorXd data, label;
 };
 
 // Read example input from array of bytes.
-Example::Example(uint8_t *cs, int inSize, uint8_t *output, int outSize)
-: inSize(inSize), outSize(outSize) {
+Example::Example(uint8_t *cs, int inSize, uint8_t *output, int outSize, int y)
+: inSize(inSize), outSize(outSize), y(y) {
   data = VectorXd(inSize);
   for (int i=0; i<inSize; ++i) {
     data[i] = int(cs[i]);
@@ -125,7 +125,7 @@ Example DataLoader::getNext() {
   }
   output[label] = 1;
   fileImages.read((char *) input, gridSize);
-  return Example(input, gridSize, output, 10);
+  return Example(input, gridSize, output, 10, label);
 }
 
 class NeuralNetwork {
@@ -253,20 +253,28 @@ const vector<MatrixXd> NeuralNetwork::backprop(const Example &e) {
   VectorXd delta = costDerivative(actvs[depth], e.getLabel())
     .cwiseProduct(sigmoidPrime(zs.back()));
   
-  grad[depth-1] = delta * actvs[depth].transpose();
-  cout << "Grad: \n" << grad[depth-1] << endl;
+  //printf("w(%d,%d)\n", delta.rows(), delta.cols());
+  //printf("w(%d,%d)\n", actvs[depth-1].rows(), actvs[depth-1].cols());
+  grad[depth-1] = actvs[depth-1]*delta.transpose();
+  //printf("w(%d,%d)\n", grad[depth-1].rows(), grad[depth-1].cols());
+  //cout << "Grad: \n" << grad[depth-1] << endl;
 
   // Loop layers, from depth-2 to 0, finding the nablas and partial derivatives.
   for (int i=depth-2; i >= 0; --i) {
-    printf("i=%d\n", i);
+    //printf("i=%d\n", i);
     //cout << "Porra: \n" << sigmoidPrime(zs[i]) << endl;
     delta = (weights[i+1]*delta).cwiseProduct(sigmoidPrime(zs[i]));
+    //printf("d(%d,%d)\n", delta.rows(), delta.cols());
     //cout << "Delta: \n" << delta << endl;
-    grad[i] = delta * actvs[i].transpose();
+    grad[i] = actvs[i] * delta.transpose();
+    //printf("g(%d,%d)\n", grad[i].rows(), grad[i].cols());
     //cout << "Actvs " << i << endl << actvs.back() << endl;
   }
 
-  cout << "Grad " << grad[1] << endl;
+  //printf("w(%d,%d)\n", grad[depth-1].rows(), grad[depth-1].cols());
+  //cout << "Grad " << grad[depth-1] << endl;
+  cout << "Right? " << actvs[depth] << endl;
+  cout << "Right? " << e.getLabel() << endl;
 
   return grad;
 }
@@ -275,23 +283,37 @@ void NeuralNetwork::SGD(DataLoader &dl) {
 
   //cout << net.feedForward(MatrixXd::Zero(784, 1));
 
-  for (int i=0; i<100; ++i) {
-    vector<VectorXd> deltas(depth);
+  int batchSize = 5, lrate = 3;
+  int count = 0;
+
+  for (int i=0; i<1000; ++i) {
+    // Initialize sum of gradients to 0.
+    vector<MatrixXd> deltas(depth);
     for (int i=0; i<depth; i++) {
-      deltas[i] = VectorXd::Zero(layout[i]+1);
+      deltas[i] = MatrixXd::Zero(weights[i].rows(), weights[i].cols());
     }
 
-    for (int i2=0; i2<5; ++i) {
-      //system("clear");
-      cout << "let's get next\n";
+    for (int i2=0; i2<batchSize; ++i2, ++count) {
+      system("clear");
+      printf("i=%d\n", count);
+      //cout << "let's get next" << i2 << endl;
       Example example = dl.getNext();
-      cout << "let's backprop\n";
       // example.printGrid(28, 28);
-      vector<VectorXd> dd = net.backprop(example);
+      vector<MatrixXd> dd = backprop(example);
       // Accumulate nablas.
       for (int i=0; i<dd.size(); ++i) {
+        printf("wtfucking w(%d,%d) with dd(%d,%d)\n", deltas[i].rows(),
+          deltas[i].cols(), dd[i].rows(), dd[i].cols());
+
         deltas[i] += dd[i];
       }
+    }
+
+    // Use sum of gradients to modify weights.
+    for (int i=0; i<depth; i++) {
+      printf("updating w(%d,%d) with delta(%d,%d)\n", weights[i].rows(),
+          weights[i].cols(), deltas[i].rows(), deltas[i].cols());
+      weights[i] -= lrate/batchSize*deltas[i];
     }
   }
 }
