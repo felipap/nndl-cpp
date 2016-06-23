@@ -71,8 +71,8 @@ void Example::printGrid(int w, int h) {
 class DataLoader {
 public:
   Example getNext();
-  const vector<Example> getNext(int num);
-  const vector<Example> getAll();
+  vector<Example *> getNext(int num);
+  const vector<Example *> getAll();
 
   DataLoader(const string& p, const string& p2);
   int imageHeight, imageWidth, gridSize;
@@ -135,18 +135,18 @@ Example DataLoader::getNext() {
   return Example(input, gridSize, output, 10, label);
 }
 
-const vector<Example> DataLoader::getNext(int num) {
-  vector<Example> es;
+vector<Example *> DataLoader::getNext(int num) {
+  vector<Example *> es;
   for (int i=0; i<num; i++) {
-    es.push_back(getNext());
+    es.push_back(new Example(getNext()));
   }
   return es;
 }
 
-const vector<Example> DataLoader::getAll() {
-  vector<Example> es;
+const vector<Example *> DataLoader::getAll() {
+  vector<Example *> es;
   while (!fileLabels.eof()) {
-    es.push_back(getNext());
+    es.push_back(new Example(getNext()));
   }
   return es;
 }
@@ -158,6 +158,7 @@ public:
   void printWeights();
   const vector<MatrixXd> backprop(const Example &e);
   void SGD(DataLoader &dl);
+  int evaluate(const vector<Example *> &vset);
   const vector<MatrixXd> calcFromBatch(vector<Example *> &es);
 private:
   int depth; 
@@ -171,12 +172,9 @@ private:
 
 void NeuralNetwork::printWeights() {
   cout << string(60, '-') << endl;
-
-  cout << "\n> Weights: " << endl;
   for (int i=0; i<depth; ++i) {
     cout << "Layer " << i << ":\n" << weights[i] << "\n";
   }
-  cout << string(60, '-') << endl;
 }
 
 
@@ -212,19 +210,16 @@ VectorXd sigmoidPrime(const VectorXd &base) {
 
 VectorXd NeuralNetwork::feedForward(const VectorXd input) {
   if (input.size() != layout[0]) {
-    throw domain_error("Wrong input dimension.");
+    throw domain_error("Input of wrong dimension.");
   }
-
   VectorXd A(1+input.size());
   A << 1, input; // Add bias neuron (set to 1);
-
   for (int i=0; i<depth; ++i) {
     A[0] = 1; // Set bias neuron to 1.
     // A[0] = 1 mustn't be executed for last activation (aka. the nn output)
     // because there's no bias neuron exists in the last layer.
     A = sigmoid(weights[i].transpose()*A);
   }
-
   return A;
 }
 
@@ -293,29 +288,50 @@ const vector<MatrixXd> NeuralNetwork::backprop(const Example &e) {
   return grad;
 }
 
+int NeuralNetwork::evaluate(const vector<Example *> &vset) {
+  int right = 0;
+  for (int i=0; i<vset.size(); ++i) {
+    VectorXd pred = feedForward(vset[i]->getInput());
+    if (pred.maxCoeff() == pred[vset[i]->y]) {
+      ++right;
+    }
+  }
+  return right;
+}
+
 void NeuralNetwork::SGD(DataLoader &dl) {
-  double batchSize = 10, lrate = 3;
-  int count = 0;
+  double lrate = 333;
+  int sbatch = 10;
 
-  vector<Example> es = dl.getAll();
+  vector<Example *> trainset = dl.getNext(50000);
+  vector<Example *> validset = dl.getNext(10000);
 
-  for (int i=0; i<1000; ++i) {
+  printf("About to train %lu examples.\n", trainset.size());
 
+  int epochs = 10;
+  for (int _e=0; _e<epochs; ++_e) {
+    shuffle(begin(trainset), end(trainset), default_random_engine{});
+    
+    for (int i=0; i<trainset.size()/sbatch; ++i) {
+      if (i%100 == 0) {
+        printf("Training batch %d to %d.\n", i*sbatch, (i+1)*sbatch);
+      }
 
-    vector<Example *> es;
-    for (int i=0; i<batchSize; i++) {
-      es.push_back(new Example(dl.getNext()));
+      vector<Example*> batch(trainset.begin()+i*sbatch,
+          trainset.begin()+(i+1)*sbatch);
+      const vector<MatrixXd> deltas = calcFromBatch(batch);
+
+      // Use sum of gradientrainset to modify weightrainset.
+      for (int i=0; i<depth; i++) {
+        weights[i] -= lrate*deltas[i];
+      }
     }
-    const vector<MatrixXd> deltas = calcFromBatch(es);
 
-    // Use sum of gradients to modify weights.
-    for (int i=0; i<depth; i++) {
-      weights[i] -= lrate*deltas[i];
-    }
+    printf("Epoch %d: %d / %lu\n", _e, evaluate(validset), validset.size());
+  }
 
-    for (int i=0; i<batchSize; i++) {
-      delete es[i];
-    }
+  for (int i=0; i<trainset.size(); ++i) {
+    delete trainset[i];
   }
 }
 
@@ -328,25 +344,25 @@ const vector<MatrixXd> NeuralNetwork::calcFromBatch(vector<Example *> &es) {
     deltas[i] = MatrixXd::Zero(weights[i].rows(), weights[i].cols());
   }
 
-  for (int i2=0; i2<es.size(); ++i2) {
+  int size = es.size();
+  for (int i2=0; i2<size; ++i2) {
     //system("clear");
     //cout << es[i2].getInput() << endl;
     //printf("oiem %d %d\n", i2, es[i2].getInput().size());
     vector<MatrixXd> dd = backprop(*(es[i2]));
     // Accumulate nablas.
     for (int i=0; i<dd.size(); ++i) {
-      deltas[i] += dd[i]; // Accumulate the partial derivatives (𝜕Cost(W)/𝜕w).
+      deltas[i] += dd[i]/size; // Accumulate the partial derivatives.
     }
   }
 
-  // Return average of sum of gradients.
-  return deltas/es.size();
+  return deltas;
 }
 
 int main() {
   DataLoader dl("train-labels-idx1-ubyte", "train-images-idx3-ubyte");
 
-	int layout[] = {784, 30, 10};
+	int layout[] = {784, 30, 30, 10};
   NeuralNetwork net(layout, sizeof(layout)/sizeof(*layout));
   net.SGD(dl);
 
